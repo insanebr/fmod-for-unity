@@ -326,6 +326,9 @@ namespace FMODUnity
             {
                 studioInitFlags |= FMOD.Studio.INITFLAGS.LIVEUPDATE;
                 advancedSettings.profilePort = (ushort)currentPlatform.LiveUpdatePort;
+#if UNITY_SERVER
+                advancedSettings.profilePort = 9270;
+#endif
             }
 
 retry:
