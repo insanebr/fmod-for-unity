@@ -1,0 +1,7 @@
+﻿{
+  "name": "com.fmod.fmodforunity",
+  "version": "2.3.0",
+  "displayName": "FMOD for Unity",
+  "description": "FMOD Unity Integration",
+  "unity": "2021.3"
+}
