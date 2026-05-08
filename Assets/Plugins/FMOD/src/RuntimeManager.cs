@@ -159,11 +159,12 @@ namespace FMODUnity
 
                 if (instance == null)
                 {
-                    if (!Application.isPlaying)
+                    // This log generates an error when called from FMOD Callbacks, which is not allowed as it is does not run on the main thread.
+                    /*if (!Application.isPlaying)
                     {
                         Debug.LogError("[FMOD] RuntimeManager accessed outside of runtime. Do not use RuntimeManager for Editor-only functionality, create your own System objects instead.");
                         return null;
-                    }
+                    }*/
 
                     FMOD.RESULT initResult = FMOD.RESULT.OK; // Initialize can return an error code if it falls back to NO_SOUND, throw it as a non-cached exception
 
