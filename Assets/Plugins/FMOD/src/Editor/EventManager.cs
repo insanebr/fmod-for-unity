@@ -26,7 +26,7 @@ namespace FMODUnity
         private const string BankExtension = "bank";
 
 #if UNITY_EDITOR
-        [MenuItem("FMOD/Refresh Banks", priority = 1)]
+        // [MenuItem("FMOD/Refresh Banks", priority = 1)]
         public static void RefreshBanks()
         {
             string result = UpdateCache();
@@ -605,13 +605,13 @@ namespace FMODUnity
 
         static EventManager()
         {
-            BuildStatusWatcher.OnBuildStarted += () => {
+            /*BuildStatusWatcher.OnBuildStarted += () => {
                 BuildTargetChanged();
                 CopyToStreamingAssets(EditorUserBuildSettings.activeBuildTarget);
             };
             BuildStatusWatcher.OnBuildEnded += () => {
                 UpdateBankStubAssets(EditorUserBuildSettings.activeBuildTarget);
-            };
+            };*/
         }
 
         public static void Startup()
@@ -625,7 +625,7 @@ namespace FMODUnity
             // Avoid throwing exceptions so we don't stop other startup code from running
             try
             {
-                RefreshBanks();
+                // RefreshBanks();
             }
             catch (Exception e)
             {
