@@ -43,6 +43,31 @@ namespace FMODUnity
 
             BankRefresher.HandleBankRefresh(result);
         }
+
+        public static void CustomInsaneRefreshBanks(List<EditorBankRef> banksToUpdate)
+        {
+	        string result = UpdateCache();
+
+	        if (eventCache == null)
+	        {
+		        Debug.LogError("Event cache is invalid.");
+		        return;
+	        }
+
+	        OnCacheChange();
+
+	        banksToUpdate.AddRange(eventCache.MasterBanks);
+	        banksToUpdate.AddRange(eventCache.StringsBanks);
+
+	        // The !StagingSystem.SourceLibsExist test ensures that we are not referencing an unpopulated cache.
+	        if (Settings.Instance.ImportType == ImportType.AssetBundle && !StagingSystem.SourceLibsExist)
+	        {
+		        UpdateBankStubAssets(EditorUserBuildSettings.activeBuildTarget, banksToUpdate);
+	        }
+
+	        BankRefresher.HandleBankRefresh(result);
+	        CopyToStreamingAssets(EditorUserBuildSettings.activeBuildTarget, banksToUpdate);
+        }
 #endif
 
         private static void ClearCache()
@@ -64,7 +89,7 @@ namespace FMODUnity
             }
         }
 
-        private static string UpdateCache()
+        public static string UpdateCache()
         {
             if (eventCache == null)
             {
@@ -393,7 +418,7 @@ namespace FMODUnity
 
             if (eventRenameOccurred)
             {
-                EditorApplication.delayCall += ShowEventsRenamedDialog;
+                //EditorApplication.delayCall += ShowEventsRenamedDialog;
             }
 
             // Check if any specified banks are missing
@@ -909,6 +934,134 @@ namespace FMODUnity
             }
         }
 
+        private static void CopyToStreamingAssets(BuildTarget buildTarget, List<EditorBankRef> banksToCopy)
+        {
+            if (Settings.Instance.ImportType == ImportType.AssetBundle && BuildPipeline.isBuildingPlayer)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(Settings.Instance.SourceBankPath))
+                return;
+
+            Platform platform = EditorSettings.Instance.GetPlatform(buildTarget);
+
+            if (platform == Settings.Instance.DefaultPlatform)
+            {
+                RuntimeUtils.DebugLogWarningFormat("FMOD Studio: copy banks for platform {0} : Unsupported platform", buildTarget);
+                return;
+            }
+
+            string bankTargetFolder =
+                Settings.Instance.ImportType == ImportType.StreamingAssets
+                ? Settings.Instance.TargetPath
+                : Application.dataPath + (string.IsNullOrEmpty(Settings.Instance.TargetAssetPath) ? "" : '/' + Settings.Instance.TargetAssetPath);
+            bankTargetFolder = RuntimeUtils.GetCommonPlatformPath(bankTargetFolder);
+            Directory.CreateDirectory(bankTargetFolder);
+
+            string bankTargetExtension =
+                Settings.Instance.ImportType == ImportType.StreamingAssets
+                ? ".bank"
+                : ".bytes";
+
+            string bankSourceFolder =
+                Settings.Instance.HasPlatforms
+                ? Settings.Instance.SourceBankPath + '/' + platform.BuildDirectory
+                : Settings.Instance.SourceBankPath;
+            bankSourceFolder = RuntimeUtils.GetCommonPlatformPath(bankSourceFolder);
+
+            if (Path.GetFullPath(bankTargetFolder).TrimEnd('/').ToUpperInvariant() ==
+                Path.GetFullPath(bankSourceFolder).TrimEnd('/').ToUpperInvariant())
+            {
+                return;
+            }
+
+            bool madeChanges = false;
+            HashSet<string> bankPaths = new HashSet<string>();
+
+            try
+            {
+                // Clean out any stale .bank files
+                string[] existingBankFiles =
+                    Directory.GetFiles(bankTargetFolder, "*" + bankTargetExtension, SearchOption.AllDirectories);
+
+                foreach (string bankFilePath in existingBankFiles)
+                {
+                    string bankName = EditorBankRef.CalculateName(bankFilePath, bankTargetFolder);
+
+                    if (!eventCache.EditorBanks.Exists(x => x.Name == bankName))
+                    {
+                        string assetPath = bankFilePath.Replace(Application.dataPath, AssetsFolderName);
+
+                        if (AssetHasLabel(assetPath, FMODLabel))
+                        {
+                            AssetDatabase.MoveAssetToTrash(assetPath);
+                            madeChanges = true;
+                        }
+                    }
+                }
+
+                // Copy over any files that don't match timestamp or size or don't exist
+                AssetDatabase.StartAssetEditing();
+                foreach (var bankRef in banksToCopy)
+                {
+                    string sourcePath = bankSourceFolder + "/" + bankRef.Name + ".bank";
+                    string targetPathRelative = bankRef.Name + bankTargetExtension;
+                    string targetPathFull = bankTargetFolder + "/" + targetPathRelative;
+
+                    FileInfo sourceInfo = new FileInfo(sourcePath);
+                    FileInfo targetInfo = new FileInfo(targetPathFull);
+
+                    if (!targetInfo.Exists ||
+                        sourceInfo.Length != targetInfo.Length ||
+                        sourceInfo.LastWriteTime != targetInfo.LastWriteTime)
+                    {
+                        if (targetInfo.Exists)
+                        {
+                            targetInfo.IsReadOnly = false;
+                        }
+                        else
+                        {
+                            EnsureFoldersExist(targetPathRelative, bankTargetFolder);
+                        }
+
+                        File.Copy(sourcePath, targetPathFull, true);
+                        targetInfo = new FileInfo(targetPathFull);
+                        targetInfo.IsReadOnly = false;
+                        targetInfo.LastWriteTime = sourceInfo.LastWriteTime;
+
+                        madeChanges = true;
+
+                        string assetString = targetPathFull.Replace(Application.dataPath, "Assets");
+                        AssetDatabase.ImportAsset(assetString);
+                        bankPaths.Add(assetString);
+                    }
+                }
+
+                RemoveEmptyFMODFolders(bankTargetFolder);
+            }
+            catch (Exception exception)
+            {
+                RuntimeUtils.DebugLogErrorFormat("FMOD Studio: copy banks for platform {0} : copying banks from {1} to {2}",
+                    platform.DisplayName, bankSourceFolder, bankTargetFolder);
+                RuntimeUtils.DebugLogException(exception);
+                return;
+            }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+            }
+
+            if (madeChanges)
+            {
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+                RuntimeUtils.DebugLogFormat("FMOD Studio: copy banks for platform {0} : copying banks from {1} to {2} succeeded",
+                    platform.DisplayName, bankSourceFolder, bankTargetFolder);
+                ApplyFMODLabel(bankPaths);
+            }
+        }
+
         public static void UpdateBankStubAssets(BuildTarget buildTarget)
         {
             if (Settings.Instance.ImportType != ImportType.AssetBundle
@@ -984,6 +1137,147 @@ namespace FMODUnity
                 foreach (var bankRef in eventCache.EditorBanks)
                 {
                     string sourcePath = bankSourceFolder + "/" + bankRef.Name + ".bank";
+                    string targetPathRelative = bankRef.Name + BankAssetExtension;
+                    string targetPathFull = bankTargetFolder + "/" + targetPathRelative;
+
+                    EnsureFoldersExist(targetPathRelative, bankTargetFolder);
+
+                    FileInfo targetInfo = new FileInfo(targetPathFull);
+
+                    string stubData = RuntimeManager.BankStubPrefix + bankRef.Name;
+
+                    // Minimise asset database refreshing by only writing the stub if necessary
+                    bool writeStub;
+
+                    if (targetInfo.Exists && targetInfo.Length == stubData.Length)
+                    {
+                        using (StreamReader reader = targetInfo.OpenText())
+                        {
+                            string contents = reader.ReadToEnd();
+                            writeStub = (contents != stubData);
+                        }
+                    }
+                    else
+                    {
+                        writeStub = true;
+                    }
+
+                    if (writeStub)
+                    {
+                        // Create or update the stub
+                        using (StreamWriter writer = targetInfo.CreateText())
+                        {
+                            writer.Write(stubData);
+                        }
+
+                        madeChanges = true;
+
+                        if (!targetInfo.Exists)
+                        {
+                            string assetPath = targetPathFull.Replace(Application.dataPath, "Assets");
+                            AssetDatabase.ImportAsset(assetPath);
+
+                            bankPaths.Add(assetPath);
+                        }
+                    }
+                }
+                RemoveEmptyFMODFolders(bankTargetFolder);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogErrorFormat("FMOD: Updating bank stubs in {0} to match {1}",
+                    bankTargetFolder, bankSourceFolder);
+                Debug.LogException(exception);
+                return;
+            }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+            }
+
+            if (madeChanges)
+            {
+                AssetDatabase.SaveAssets();
+                AssetDatabase.Refresh();
+                Debug.LogFormat("FMOD: Updated bank stubs in {0} to match {1}", bankTargetFolder, bankSourceFolder);
+                ApplyFMODLabel(bankPaths);
+            }
+        }
+
+        private static void UpdateBankStubAssets(BuildTarget buildTarget, List<EditorBankRef> banksToUpdate)
+        {
+            if (Settings.Instance.ImportType != ImportType.AssetBundle
+                || string.IsNullOrEmpty(Settings.Instance.SourceBankPath))
+            {
+                return;
+            }
+
+            Platform platform = EditorSettings.Instance.GetPlatform(buildTarget);
+
+            if (platform == Settings.Instance.DefaultPlatform)
+            {
+                Debug.LogWarningFormat("FMOD: Updating bank stubs: Unsupported platform {0}", buildTarget);
+                return;
+            }
+
+            string bankTargetFolder = Application.dataPath;
+
+            if (!string.IsNullOrEmpty(Settings.Instance.TargetAssetPath))
+            {
+                bankTargetFolder += "/" + Settings.Instance.TargetAssetPath;
+            }
+
+            bankTargetFolder = RuntimeUtils.GetCommonPlatformPath(bankTargetFolder);
+
+            string bankSourceFolder = Settings.Instance.SourceBankPath;
+
+            if (Settings.Instance.HasPlatforms)
+            {
+                bankSourceFolder += "/" + platform.BuildDirectory;
+            }
+
+            bankSourceFolder = RuntimeUtils.GetCommonPlatformPath(bankSourceFolder);
+
+            if (Path.GetFullPath(bankTargetFolder).TrimEnd('/').ToUpperInvariant() ==
+                Path.GetFullPath(bankSourceFolder).TrimEnd('/').ToUpperInvariant())
+            {
+                return;
+            }
+
+            bool madeChanges = false;
+
+            HashSet<string> bankPaths = new HashSet<string>();
+
+            Directory.CreateDirectory(bankTargetFolder);
+
+            try
+            {
+                const string BankAssetExtension = ".bytes";
+
+                // Clean out any stale stubs
+                string[] existingBankFiles =
+                    Directory.GetFiles(bankTargetFolder, "*" + BankAssetExtension, SearchOption.AllDirectories);
+
+                foreach (string bankFilePath in existingBankFiles)
+                {
+                    string bankName = EditorBankRef.CalculateName(bankFilePath, bankTargetFolder);
+
+                    if (!eventCache.EditorBanks.Exists(x => x.Name == bankName))
+                    {
+                        string assetPath = bankFilePath.Replace(Application.dataPath, AssetsFolderName);
+
+                        if (AssetHasLabel(assetPath, FMODLabel))
+                        {
+                            AssetDatabase.MoveAssetToTrash(assetPath);
+                            madeChanges = true;
+                        }
+                    }
+                }
+
+                // Create any stubs that don't exist, and ensure any that do exist have the correct data
+                AssetDatabase.StartAssetEditing();
+                foreach (var bankRef in banksToUpdate)
+                {
                     string targetPathRelative = bankRef.Name + BankAssetExtension;
                     string targetPathFull = bankTargetFolder + "/" + targetPathRelative;
 
